@@ -13,11 +13,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($title === '' || $body === '') {
         $error = 'Title and body are required.';
     } else {
+        $publish_at = trim($_POST['publish_at'] ?? '');
+        $publish_at = $publish_at !== '' ? $publish_at : null;
+        $slug = generate_slug($title);
+
         $stmt = db()->prepare('
-            INSERT INTO documents (title, body, created_by)
-            VALUES (?, ?, ?)
+            INSERT INTO documents (title, body, created_by, publish_at, slug)
+            VALUES (?, ?, ?, ?, ?)
         ');
-        $stmt->execute([$title, $body, $staff['id']]);
+        $stmt->execute([$title, $body, $staff['id'], $publish_at, $slug]);
         $docId = (int) db()->lastInsertId();
 
         audit_log('create', 'document', $docId, ['title' => $title]);
@@ -27,12 +31,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+$search = trim($_GET['search'] ?? '');
+
+if ($search !== '') {
+    $stmt = db()->prepare('
+        SELECT d.*, s.name AS creator_name
+        FROM documents d
+        JOIN staff s ON s.id = d.created_by
+        WHERE d.title LIKE ?
+        ORDER BY d.created_at DESC
+    ');
+    $stmt->execute(['%' . $search . '%']);
+    $docs = $stmt->fetchAll();
+} else {
 $docs = db()->query('
     SELECT d.*, s.name AS creator_name
     FROM documents d
     JOIN staff s ON s.id = d.created_by
     ORDER BY d.created_at DESC
 ')->fetchAll();
+}
 
 render_header('Admin', $staff);
 ?>
@@ -59,12 +77,28 @@ render_header('Admin', $staff);
             <label for="body">Body</label>
             <textarea id="body" name="body" required></textarea>
         </div>
+        <div class="form-field">
+            <label for="publish_at">Publish At (optional)</label>
+            <input type="datetime-local" id="publish_at" name="publish_at">
+        </div>
         <button type="submit" class="btn">Create document</button>
     </form>
 </section>
 
 <section class="card">
     <h2 class="card-title">Documents</h2>
+    <form method="get" class="search-form">
+    <input 
+        type="text" 
+        name="search" 
+        placeholder="Search by title..." 
+        value="<?= h($search) ?>"
+    >
+    <button type="submit" class="btn">Search</button>
+    <?php if ($search): ?>
+        <a href="/admin.php" class="btn-link">Clear</a>
+    <?php endif ?>
+</form>
     <?php if (empty($docs)): ?>
         <p class="empty">No documents yet.</p>
     <?php else: ?>
@@ -73,6 +107,7 @@ render_header('Admin', $staff);
                 <tr>
                     <th>ID</th>
                     <th>Title</th>
+                    <th>Slug</th>
                     <th>Creator</th>
                     <th>Created</th>
                     <th></th>
@@ -83,6 +118,7 @@ render_header('Admin', $staff);
                     <tr>
                         <td class="id">#<?= (int) $d['id'] ?></td>
                         <td><?= h($d['title']) ?></td>
+                        <td><code><?= h($d['slug'] ?? '-') ?></code></td>
                         <td><?= h($d['creator_name']) ?></td>
                         <td><?= h($d['created_at']) ?></td>
                         <td><a href="/share.php?doc=<?= (int) $d['id'] ?>" class="btn-link">Create share →</a></td>
